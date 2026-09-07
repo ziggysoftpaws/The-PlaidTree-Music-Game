@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The PlaidTree Music Game</title>
+    <!-- 8-Bit Retro Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Press Start 2P', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            user-select: none;
+        }
+        h1 {
+            margin: 10px 0;
+            font-size: 16px;
+            color: #e52521;
+            text-shadow: 2px 2px #fff;
+        }
+        p {
+            margin: 5px 0 15px 0;
+            font-size: 9px;
+            color: #aaa;
+            line-height: 1.6;
+            text-align: center;
+        }
+        #game-container {
+            position: relative;
+            border: 4px solid #fff;
+            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        }
+        canvas {
+            display: block;
+            background-color: #5c94fc;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>SUPER MARIO BROS (UNDERGROUND)</h1>
+    <p>MOVE: [A/D] or [LEFT/RIGHT] | JUMP: [W/SPACE/UP] | PIPE ENTER: [S] or [DOWN]</p>
+    
+    <div id="game-container">
+        <canvas id="gameCanvas" width="256" height="240" style="width: 512px; height: 480px;"></canvas>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// Audio Synthesizer Engine
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new AudioCtx();
+}
+
+function playSound(type) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+
+    if (type === 'jump') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now);
+        osc.stop(now + 0.15);
+    } else if (type === 'coin') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(987.77, now);
+        osc.frequency.setValueAtTime(1318.51, now + 0.08);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+    } else if (type === 'stomp') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(120, now);
+        osc.frequency.linearRampToValueAtTime(40, now + 0.1);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'pipe') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(80, now + 0.35);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
+    } else if (type === 'gameover') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(100, now + 0.5);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.5);
+        osc.start(now);
+        osc.stop(now + 0.5);
+    } else if (type === 'win') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(523.25, now);
+        osc.frequency.setValueAtTime(659.25, now + 0.1);
+        osc.frequency.setValueAtTime(783.99, now + 0.2);
+        osc.frequency.setValueAtTime(1046.50, now + 0.3);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.6);
+        osc.start(now);
+        osc.stop(now + 0.6);
+    }
+}
+
+// Game Physics & State
+const GRAVITY = 0.4;
+let currentLevel = 'surface'; // 'surface' or 'underground'
+let cameraX = 0;
+let score = 0;
+let coinsCollected = 0;
+let gameOver = false;
+let gameWon = false;
+
+const keys = { right: false, left: false, up: false, down: false };
+
+window.addEventListener('keydown', (e) => {
+    initAudio();
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+        keys.down = true;
+        checkPipeEnter();
+    }
+    if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') {
+        if (!keys.up && player.grounded) {
+            player.velocityY = -player.jumpPower;
+            player.grounded = false;
+            playSound('jump');
+        }
+        keys.up = true;
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = false;
+    if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') keys.up = false;
+});
+
+// Player Object
+const player = {
+    x: 30,
+    y: 160,
+    width: 12,
+    height: 16,
+    velocityX: 0,
+    velocityY: 0,
+    speed: 1.8,
+    jumpPower: 7.2,
+    grounded: false,
+    facing: 'right',
+    animFrame: 0
+};
+
+// --- SURFACE LEVEL DATA ---
+const surfaceData = {
+    bgColor: '#5c94fc',
+    platforms: [
+        { x: 0, y: 208, width: 350, height: 32, type: 'ground' },
+        { x: 384, y: 208, width: 300, height: 32, type: 'ground' },
+        { x: 720, y: 208, width: 450, height: 32, type: 'ground' },
+        { x: 96, y: 144, width: 16, height: 16, type: 'brick' },
+        { x: 112, y: 144, width: 16, height: 16, type: 'question' },
+        { x: 128, y: 144, width: 16, height: 16, type: 'brick' },
+        { x: 240, y: 128, width: 48, height: 16, type: 'brick' },
+        { x: 432, y: 144, width: 16, height: 16, type: 'question' },
+        { x: 464, y: 112, width: 48, height: 16, type: 'brick' },
+
+        // Pipes
+        { x: 192, y: 176, width: 32, height: 32, type: 'pipe' },
+        // Entrance Warp Pipe into Underground
+        { x: 528, y: 160, width: 32, height: 48, type: 'pipe', isWarpPipe: true },
+        // Exit Destination Pipe from Underground
+        { x: 750, y: 176, width: 32, height: 32, type: 'pipe' },
+
+        // Flagpole End Goal
+        { x: 1080, y: 48, width: 4, height: 160, type: 'flagpole' },
+        { x: 1074, y: 48, width: 16, height: 8, type: 'flagtop' }
+    ],
+    coins: [
+        { x: 114, y: 124, width: 10, height: 12, collected: false },
+        { x: 243, y: 108, width: 10, height: 12, collected: false },
+        { x: 259, y: 108, width: 10, height: 12, collected: false },
+        { x: 275, y: 108, width: 10, height: 12, collected: false },
+        { x: 435, y: 124, width: 10, height: 12, collected: false }
+    ],
+    enemies: [
+        { x: 240, y: 192, width: 16, height: 16, vx: -0.6, alive: true },
+        { x: 480, y: 192, width: 16, height: 16, vx: -0.6, alive: true },
+        { x: 880, y: 192, width: 16, height: 16, vx: -0.6, alive: true }
+    ]
+};
+
+// --- UNDERGROUND LEVEL DATA ---
+const undergroundData = {
+    bgColor: '#000000',
+    platforms: [
+        // Underground Ground & Ceiling
+        { x: 0, y: 208, width: 450, height: 32, type: 'ground' },
+        { x: 0, y: 0, width: 450, height: 16, type: 'brick' },
+
+        // Platforms & Bricks
+        { x: 60, y: 160, width: 64, height: 16, type: 'brick' },
+        { x: 160, y: 128, width: 80, height: 16, type: 'brick' },
+        { x: 260, y: 160, width: 48, height: 16, type: 'question' },
+
+        // Horizontal Exit Pipe on the right wall
+        { x: 380, y: 176, width: 32, height: 32, type: 'pipe', isExitPipe: true }
+    ],
+    coins: [
+        { x: 70, y: 140, width: 10, height: 12, collected: false },
+        { x: 90, y: 140, width: 10, height: 12, collected: false },
+        { x: 170, y: 108, width: 10, height: 12, collected: false },
+        { x: 190, y: 108, width: 10, height: 12, collected: false },
+        { x: 210, y: 108, width: 10, height: 12, collected: false },
+        { x: 275, y: 140, width: 10, height: 12, collected: false }
+    ],
+    enemies: [
+        { x: 140, y: 192, width: 16, height: 16, vx: -0.6, alive: true },
+        { x: 220, y: 192, width: 16, height: 16, vx: -0.6, alive: true },
+        { x: 310, y: 192, width: 16, height: 16, vx: -0.6, alive: true }
+    ]
+};
+
+// Dynamic Getters for active level assets
+function getActiveLevel() {
+    return currentLevel === 'surface' ? surfaceData : undergroundData;
+}
+
+// Check Pipe Entrance/Exit Logic
+function checkPipeEnter() {
+    if (gameOver || gameWon) return;
+
+    if (currentLevel === 'surface') {
+        const warpPipe = surfaceData.platforms.find(p => p.isWarpPipe);
+        // Player must be directly over top of warp pipe
+        if (
+            player.x + player.width > warpPipe.x &&
+            player.x < warpPipe.x + warpPipe.width &&
+            Math.abs((player.y + player.height) - warpPipe.y) < 6
+        ) {
+            playSound('pipe');
+            currentLevel = 'underground';
+            player.x = 20;
+            player.y = 100;
+            player.velocityX = 0;
+            player.velocityY = 0;
+            cameraX = 0;
+        }
+    }
+}
+
+function checkExitPipe() {
+    if (currentLevel === 'underground') {
+        const exitPipe = undergroundData.platforms.find(p => p.isExitPipe);
+        if (checkCollision(player, exitPipe)) {
+            playSound('pipe');
+            currentLevel = 'surface';
+            // Spawn out of the destination pipe on the surface
+            player.x = 758;
+            player.y = 150;
+            player.velocityX = 0;
+            player.velocityY = 0;
+            cameraX = player.x - canvas.width / 2;
+        }
+    }
+}
+
+// Physics & Game Loop Logic
+function update() {
+    if (gameOver || gameWon) return;
+
+    const level = getActiveLevel();
+
+    // Horizontal Movement
+    if (keys.right) {
+        player.velocityX = player.speed;
+        player.facing = 'right';
+        player.animFrame += 0.2;
+    } else if (keys.left) {
+        player.velocityX = -player.speed;
+        player.facing = 'left';
+        player.animFrame += 0.2;
+    } else {
+        player.velocityX = 0;
+        player.animFrame = 0;
+    }
+
+    player.velocityY += GRAVITY;
+
+    // Movement X & Collision
+    player.x += player.velocityX;
+    if (player.x < 0) player.x = 0;
+
+    level.platforms.forEach(p => {
+        if (p.type === 'flagpole' || p.type === 'flagtop') return;
+        if (checkCollision(player, p)) {
+            if (player.velocityX > 0) player.x = p.x - player.width;
+            else if (player.velocityX < 0) player.x = p.x + p.width;
+        }
+    });
+
+    // Exit Pipe Check (Underground)
+    checkExitPipe();
+
+    // Movement Y & Collision
+    player.y += player.velocityY;
+    player.grounded = false;
+
+    level.platforms.forEach(p => {
+        if (p.type === 'flagpole') {
+            if (checkCollision(player, p)) {
+                gameWon = true;
+                playSound('win');
+            }
+            return;
+        }
+
+        if (checkCollision(player, p)) {
+            if (player.velocityY > 0 && (player.y + player.height - player.velocityY) <= p.y + 6) {
+                player.y = p.y - player.height;
+                player.velocityY = 0;
+                player.grounded = true;
+            } else if (player.velocityY < 0) {
+                player.y = p.y + p.height;
+                player.velocityY = 0;
+            }
+        }
+    });
+
+    // Fall into Pit Death
+    if (player.y > canvas.height) {
+        gameOver = true;
+        playSound('gameover');
+    }
+
+    // Dynamic Camera Tracking
+    if (player.x - cameraX > canvas.width / 2) {
+        cameraX = player.x - canvas.width / 2;
+    } else if (player.x - cameraX < 20 && cameraX > 0) {
+        cameraX = player.x - 20;
+        if (cameraX < 0) cameraX = 0;
+    }
+
+    // Collect Coins
+    level.coins.forEach(coin => {
+        if (!coin.collected && checkCollision(player, coin)) {
+            coin.collected = true;
+            score += 200;
+            coinsCollected++;
+            playSound('coin');
+        }
+    });
+
+    // Enemy Patrol & Collision Mechanics
+    level.enemies.forEach(enemy => {
+        if (!enemy.alive) return;
+
+        enemy.x += enemy.vx;
+
+        level.platforms.forEach(p => {
+            if (p.type === 'flagpole' || p.type === 'flagtop') return;
+            if (checkCollision(enemy, p)) {
+                if (enemy.vx > 0) {
+                    enemy.x = p.x - enemy.width;
+                    enemy.vx = -enemy.vx;
+                } else if (enemy.vx < 0) {
+                    enemy.x = p.x + p.width;
+                    enemy.vx = -enemy.vx;
+                }
+            }
+        });
+
+        if (checkCollision(player, enemy)) {
+            if (player.velocityY > 0 && (player.y + player.height - player.velocityY) <= enemy.y + 6) {
+                enemy.alive = false;
+                player.velocityY = -4.5;
+                score += 100;
+                playSound('stomp');
+            } else {
+                gameOver = true;
+                playSound('gameover');
+            }
+        }
+    });
+}
+
+function checkCollision(r1, r2) {
+    return r1.x < r2.x + r2.width &&
+           r1.x + r1.width > r2.x &&
+           r1.y < r2.y + r2.height &&
+           r1.y + r1.height > r2.y;
+}
+
+// Pixel Graphics Rendering Engine
+function render() {
+    const level = getActiveLevel();
+
+    // Background Sky / Underground Palette
+    ctx.fillStyle = level.bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.translate(-Math.floor(cameraX), 0);
+
+    // Platforms & Terrain
+    level.platforms.forEach(p => {
+        if (p.type === 'ground') {
+            ctx.fillStyle = (currentLevel === 'surface') ? '#c84c0c' : '#0070ec'; // Blue dirt underground
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = (currentLevel === 'surface') ? '#00a800' : '#00a8a8';
+            ctx.fillRect(p.x, p.y, p.width, 4);
+        } else if (p.type === 'brick') {
+            ctx.fillStyle = (currentLevel === 'surface') ? '#c84c0c' : '#0070ec';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(p.x, p.y, p.width, 1);
+            ctx.fillRect(p.x, p.y + 8, p.width, 1);
+            ctx.fillRect(p.x + 8, p.y, 1, 8);
+            ctx.fillRect(p.x + 4, p.y + 8, 1, 8);
+        } else if (p.type === 'question') {
+            ctx.fillStyle = '#fc9838';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = '#000';
+            ctx.strokeRect(p.x + 0.5, p.y + 0.5, p.width - 1, p.height - 1);
+            ctx.fillRect(p.x + 5, p.y + 3, 6, 2);
+            ctx.fillRect(p.x + 9, p.y + 5, 2, 3);
+            ctx.fillRect(p.x + 7, p.y + 8, 2, 2);
+            ctx.fillRect(p.x + 7, p.y + 11, 2, 2);
+        } else if (p.type === 'pipe') {
+            ctx.fillStyle = '#00a800';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = '#80d010';
+            ctx.fillRect(p.x + 4, p.y, 4, p.height);
+            ctx.fillStyle = '#000';
+            ctx.strokeRect(p.x + 0.5, p.y + 0.5, p.width - 1, p.height - 1);
+            ctx.fillStyle = '#00a800';
+            ctx.fillRect(p.x - 2, p.y, p.width + 4, 10);
+            ctx.strokeRect(p.x - 1.5, p.y + 0.5, p.width + 3, 10);
+        } else if (p.type === 'flagpole') {
+            ctx.fillStyle = '#f8d820';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+        } else if (p.type === 'flagtop') {
+            ctx.fillStyle = '#00a800';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+        }
+    });
+
+    // Coins
+    level.coins.forEach(c => {
+        if (!c.collected) {
+            ctx.fillStyle = '#f8d820';
+            ctx.fillRect(c.x + 2, c.y, 6, 12);
+            ctx.fillStyle = '#fc9838';
+            ctx.fillRect(c.x + 4, c.y + 2, 2, 8);
+        }
+    });
+
+    // Goombas
+    level.enemies.forEach(e => {
+        if (e.alive) {
+            ctx.fillStyle = (currentLevel === 'surface') ? '#c84c0c' : '#0070ec';
+            ctx.fillRect(e.x + 2, e.y, 12, 12);
+            ctx.fillRect(e.x, e.y + 4, 16, 6);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(e.x, e.y + 12, 5, 4);
+            ctx.fillRect(e.x + 11, e.y + 12, 5, 4);
+            ctx.fillStyle = '#f8d820';
+            ctx.fillRect(e.x + 3, e.y + 6, 3, 4);
+            ctx.fillRect(e.x + 10, e.y + 6, 3, 4);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(e.x + 4, e.y + 7, 2, 3);
+            ctx.fillRect(e.x + 10, e.y + 7, 2, 3);
+        }
+    });
+
+    // 8-Bit Mario Sprite
+    const px = Math.floor(player.x);
+    const py = Math.floor(player.y);
+
+    ctx.fillStyle = '#e52521';
+    ctx.fillRect(px + 3, py, 7, 2);
+    ctx.fillRect(px + 2, py + 2, 9, 2);
+
+    ctx.fillStyle = '#ffcccb';
+    ctx.fillRect(px + 2, py + 4, 7, 4);
+    ctx.fillRect(px + 7, py + 6, 2, 2);
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(px + 7, py + 4, 1, 2);
+    ctx.fillRect(px + 5, py + 6, 4, 2);
+
+    ctx.fillStyle = '#e52521';
+    ctx.fillRect(px + 2, py + 8, 8, 4);
+    ctx.fillStyle = '#0000fc';
+    ctx.fillRect(px + 3, py + 10, 6, 4);
+
+    ctx.fillStyle = '#6b4423';
+    if (!player.grounded) {
+        ctx.fillRect(px, py + 12, 4, 4);
+        ctx.fillRect(px + 8, py + 14, 4, 2);
+    } else if (Math.floor(player.animFrame) % 2 === 1) {
+        ctx.fillRect(px + 1, py + 14, 4, 2);
+        ctx.fillRect(px + 7, py + 13, 4, 3);
+    } else {
+        ctx.fillRect(px + 1, py + 14, 4, 2);
+        ctx.fillRect(px + 7, py + 14, 4, 2);
+    }
+
+    ctx.restore();
+
+    // Heads-Up Display (HUD)
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px "Press Start 2P"';
+    ctx.fillText(`MARIO`, 16, 16);
+    ctx.fillText(`${String(score).padStart(6, '0')}`, 16, 26);
+
+    ctx.fillText(`COINS`, 100, 16);
+    ctx.fillText(`x${String(coinsCollected).padStart(2, '0')}`, 108, 26);
+
+    ctx.fillText(`WORLD`, 170, 16);
+    ctx.fillText(currentLevel === 'surface' ? '1-1' : '1-2', 178, 26);
+
+    // End Game Overlay
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#e52521';
+        ctx.font = '12px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 10);
+        ctx.fillStyle = '#fff';
+        ctx.font = '6px "Press Start 2P"';
+        ctx.fillText('REFRESH PAGE TO RESTART', canvas.width / 2, canvas.height / 2 + 10);
+    } else if (gameWon) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#80d010';
+        ctx.font = '12px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 10);
+        ctx.fillStyle = '#fff';
+        ctx.font = '6px "Press Start 2P"';
+        ctx.fillText(`FINAL SCORE: ${score}`, canvas.width / 2, canvas.height / 2 + 10);
+    }
+}
+
+function gameLoop() {
+    update();
+    render();
+    requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+
+</body>
+</html>
